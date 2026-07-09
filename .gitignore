@@ -1,0 +1,8 @@
+# Игнорируем локальные пространства разработчиков
+go.work
+go.work.sum
+
+# Игнорируем секреты и бинарники
+.env
+wallet-service/cmd/app/app
+notification-service/notification-service

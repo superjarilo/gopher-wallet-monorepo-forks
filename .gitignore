@@ -6,3 +6,6 @@ go.work.sum
 .env
 wallet-service/cmd/app/app
 notification-service/notification-service
+
+# игнорируем локальные файлы
+loc/

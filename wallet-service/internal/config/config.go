@@ -18,7 +18,10 @@ type Config struct {
 
 func Load() (*Config, error) {
 	// Подгружаем локальный .env файл, если он есть
-	godotenv.Load()
+	err := godotenv.Load()
+	if err != nil {
+		return nil, err
+	}
 
 	var cfg Config
 	if err := env.Parse(&cfg); err != nil {

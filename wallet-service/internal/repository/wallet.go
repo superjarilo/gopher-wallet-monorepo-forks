@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"errors"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
@@ -51,7 +52,7 @@ func (r *WalletRepository) ProcessTransaction(ctx context.Context, userID string
 
 	err = tx.QueryRow(ctx, querySelect, argsSelect...).Scan(&walletID, &currentBalance, &status)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("wallet for user %s not found", userID)
 		}
 		return fmt.Errorf("failed to select wallet: %w", err)
@@ -105,4 +106,32 @@ func (r *WalletRepository) ProcessTransaction(ctx context.Context, userID string
 	}
 
 	return nil
+}
+
+// Получение данных кошелька пользователя из Postgres
+func (r *WalletRepository) GetByUserID(ctx context.Context, userID string) (string, int64, string, string, error) {
+	// 1. Строим чистый SQL через Squirrel
+	query, args, err := r.builder.
+		Select("id", "balance", "status", "currency").
+		From("wallets").
+		Where(squirrel.Eq{"user_id": userID}).
+		ToSql()
+
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("failed to build select sql: %w", err)
+	}
+
+	// 2. Выполняем запрос к пулу pgx, передавая context для поддержки таймаутов
+	var id, status, currency string
+	var balance int64
+
+	err = r.pool.QueryRow(ctx, query, args...).Scan(&id, &balance, &status, &currency)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", 0, "", "", fmt.Errorf("wallet not found for user_id: %s", userID)
+		}
+		return "", 0, "", "", fmt.Errorf("database query failed: %w", err)
+	}
+
+	return id, balance, status, currency, nil
 }

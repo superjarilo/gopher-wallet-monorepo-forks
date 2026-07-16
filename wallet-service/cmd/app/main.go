@@ -4,17 +4,37 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+    "google.golang.org/grpc"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/aimv/gopher-wallet-monorepo/wallet-service/internal/config"
 	"github.com/aimv/gopher-wallet-monorepo/wallet-service/pkg/postgres"
+	"github.com/aimv/gopher-wallet-monorepo/wallet-service/pkg/walletgrpc"
+
+	wallethttp "github.com/aimv/gopher-wallet-monorepo/wallet-service/internal/delivery/http"
+	walletgrpcserver "github.com/aimv/gopher-wallet-monorepo/wallet-service/internal/delivery/grpc"
 )
+
+// Application — контейнер для всех слоев, которые нужно запустить в main
+type Application struct {
+	HTTPHandler *wallethttp.Handler
+	GRPCServer  *walletgrpcserver.Server
+}
+
+func NewApplication(httpHandler *wallethttp.Handler, grpcServer *walletgrpcserver.Server) *Application {
+	return &Application{
+		HTTPHandler: httpHandler,
+		GRPCServer:  grpcServer,
+	}
+}
 
 func main() {
 	log.Println("Initializing configuration...")
@@ -36,9 +56,9 @@ func main() {
 	defer pgPool.Close()
 	log.Println("PostgreSQL connection pool initialized successfully.")
 
-	// 2. Вызываем автосгенерированный инжектор Google Wire для сборки слоев.
+	// 2. Вызываем автосгенерированный инжектор Google Wire для сборки структуры Application.
 	// Передаем контекст, пул базы и адрес брокера Kafka СТРОГО из нашего .env конфигуратора.
-	appHandler, err := InitializeApplication(initCtx, pgPool.Pool, cfg.KafkaBroker)
+	app, err := InitializeApplication(initCtx, pgPool.Pool, cfg.KafkaBroker)
 	if err != nil {
 		log.Fatalf("Failed to initialize application via wire: %v", err)
 	}
@@ -53,9 +73,9 @@ func main() {
 		w.Write([]byte("pong"))
 	})
 
-	// 4. КРИТИЧЕСКИЙ ШАГ: Монтируем финтех-маршруты из нашего собранного хендлера!
+	// 4. КРИТИЧЕСКИЙ ШАГ: Монтируем HTTP роуты из контейнера app
 	// Префикс /api/v1 защищает наше API от конфликтов при будущих обновлениях.
-	r.Mount("/api/v1", appHandler.Routes())
+	r.Mount("/api/v1", app.HTTPHandler.Routes())
 
 	// Настраиваем HTTP-сервер в твоем Senior-стиле
 	srv := &http.Server{
@@ -78,10 +98,36 @@ func main() {
 		}
 	}()
 
+	//======= gRPC-сервер =======	
+	// Создаем экземпляр НАШЕГО gRPC-сервера (передаем туда UseCase)
+	grpcServer := grpc.NewServer()
+	// Регистрируем наш сервер в сгенерированном Protobuf-пакете
+	walletgrpc.RegisterWalletServiceServer(grpcServer, app.GRPCServer) 
+
+	// Открываем сетевой порт TCP для gRPC
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("failed to listen tcp for grpc: %v", err)
+	}
+
+	// Запускаем gRPC в отдельной фоновой горутине, чтобы он не блокировал HTTP сервер
+	go func() {
+		log.Println("gRPC Server started on port 50051")
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatalf("grpc serve error: %v", err)
+		}
+	}()
+	//=============================
+
 	// Главный поток блокируется здесь и ждет сигнал выключения от ОС
 	<-shutdownSig
 	log.Println("Shutdown signal received. Stopping server gracefully...")
 
+	// Мягко останавливаем gRPC сервер
+	log.Println("Stopping gRPC server gracefully...")
+	grpcServer.GracefulStop() // Останавливает gRPC сервер красиво и без потери данных
+	
+	// Мягко останавливаем HTTP сервер
 	// Создаем контекст с таймаутом на 15 секунд для завершения активных запросов
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

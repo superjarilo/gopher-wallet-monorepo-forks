@@ -9,9 +9,10 @@
 ## 🗺️ Пояснения для PHP-разработчиков, переучивающихся на Go :)
 
 1. **Нет виртуальной машины:** Здесь нет `php-fpm` или Nginx. Каждый сервис компилируется в бинарник и сам является долгоживущим HTTP/gRPC сервером или демоном. 
-2. **Пул соединений «из коробки»:** Забудьте про постоянное переподключение к БД на каждый чих или pgbouncer. Приложение держит постоянный пул соединений (`pgxpool`).
-3. **Асинхронность и Очереди:** `Wallet Service` блокирует баланс транзакцией в Postgres, меняет его и мгновенно выплевывает JSON-событие в Kafka. Он освобождает память всего за 20-30мс. Сервис `Notification` и другие (будущие) сервисы параллельно и асинхронно ловят это событие из Kafka.
-4. **Dependency Injection:** Вместо тяжелой магии Laravel Service Container или Symfony DI, в Go используется утилита **Google Wire**. Она собирает зависимости (`Repository -> UseCase -> Handler`) на этапе компиляции, генерируя чистый Go-код без медленной рефлексии в рантайме.
+2. **Пул соединений «из коробки»:** Приложение держит постоянный пул соединений (`pgxpool`).
+3. **Асинхронность и Сквозной бизнес-цикл:** `Wallet Service` блокирует баланс транзакцией в Postgres, меняет его и кидает JSON-событие в Kafka. Он освобождает память всего за 20-30мс. Сервис `Notification` асинхронно ловит это событие из Kafka.
+4. **gRPC-взаимодействие (Синхронный слой):** Перехватив событие, `Notification Service` делает мгновенный бинарный gRPC-запрос на порт `50051` в `Wallet Service`, чтобы верифицировать текущий статус аккаунта и остаток на счете по протоколу HTTP/2. Данные кэшируются в сверхбыстрый **Redis 8.0**.
+5. **Dependency Injection:** В качестве DI в Go используется утилита **Google Wire**. Она собирает зависимости (`Repository -> UseCase -> Handler`) на этапе компиляции, генерируя чистый Go-код без медленной рефлексии в рантайме.
 
 ---
 
@@ -23,6 +24,17 @@
 На вашем компьютере должен быть установлен **Go 1.26** или выше. 
 * Проверить версию: `go version`
 * Если языка нет, скачайте официальный дистрибутив с [golang.org/dl](https://golang.org) (для Ubuntu рекомендуется ставить через тарбол, а не через устаревший `apt-get`, чтобы не получить древнюю версию 1.18).
+
+#### Установка инструментов Protobuf & gRPC
+Для компиляции контрактов взаимодействия вам понадобятся системный компилятор и плагины Go. Выполните в терминале:
+```bash
+# Для Ubuntu / WSL Ubuntu:
+sudo apt update && sudo apt install -y protobuf-compiler
+
+# Установка плагинов генерации Go-кода:
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+```
 
 #### Вариант А: Если у вас Windows 10/11 + WSL 2 (Ubuntu)
 Убедитесь, что у вас запущен Docker Desktop в Windows и включена интеграция с WSL (Settings -> Resources -> WSL integration -> включить тумблер на вашей Ubuntu).
@@ -44,6 +56,7 @@ docker compose up -d
 В корне репозитория (файлы `go.work` внесены в `.gitignore`, поэтому создаем рабочую зону локально):
 ```bash
 go work init ./wallet-service ./notification-service
+go work sync
 ```
 
 ### 4. Накат миграций базы данных
@@ -63,13 +76,20 @@ goose -dir migrations postgres "postgres://wallet_user:wallet_password@localhost
 docker exec -it wallet_kafka kafka-topics --create --topic transactions --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
 ```
 
-### 6. Запуск микросервисов (в разных терминалах WSL)
-* **Запуск Wallet Service (порт 8081):**
+### 6. Компиляция gRPC/Proto контрактов (При изменении API)
+Если вы меняете файл `proto/wallet.proto`, перегенерация кода в локальную папку выполняется командой из корня:
+```bash
+cd wallet-service && mkdir -p pkg/walletgrpc
+protoc --go_out=paths=source_relative:pkg/walletgrpc --go-grpc_out=paths=source_relative:pkg/walletgrpc -I ../proto ../proto/wallet.proto
+```
+
+### 7. Запуск микросервисов (в разных терминалах WSL)
+* **Запуск Wallet Service (HTTP порт 8081, gRPC порт 50051):**
   ```bash
   cd wallet-service
   go run ./cmd/app
   ```
-* **Запуск Notification Service (воркер):**
+* **Запуск Notification Service (воркер + gRPC клиент):**
   ```bash
   cd notification-service
   go run main.go
@@ -82,7 +102,9 @@ curl -X POST http://localhost:8081/api/v1/deposit \
   -H "Content-Type: application/json" \
   -d '{"user_id": "user_123", "amount": 50000}'
 ```
-В терминале `Notification Service` вы мгновенно увидите лог перехваченного пуша, а транзакция запишется в Redis-кэш истории!
+В терминале `Notification Service` вы мгновенно увидите лог перехваченного пуша, обогащенный gRPC-запросом баланса из базы данных, а транзакция запишется в Redis-кэш истории!
+
+---
 
 Проверьте логику валидации баланса, попытавшись списать больше доступного:
 ```bash
@@ -104,9 +126,12 @@ curl -X POST http://localhost:8081/api/v1/debit \
    cd anti-fraud-service
    go mod init github.com/aimv/gopher-wallet-monorepo/anti-fraud-service
    ```
-4. **Обновите свой локальный `go.work`** в корне монорепозитория, чтобы ваша IDE (VS Code / GoLand) увидела новый сервис:
+4. **Обновите свой локальный `go.work`** в корне монорепозитория, чтобы ваша IDE (VS Code / GoLand) увидела новый сервис, и синхронизируйте модули:
    ```bash
    cd ..
    go work use ./anti-fraud-service
+   go work sync
    ```
 5. Подключитесь к Kafka (адрес `localhost:9092`, топик `transactions`). Задайте уникальный `GroupID` для своего сервиса в конфиге ридера, чтобы читать поток событий независимо от `Notification Service`.
+6. При импорте общего gRPC-пакета используйте локальный путь: `import "github.com/aimv/gopher-wallet-monorepo/wallet-service/pkg/walletgrpc"`. За счет `go.work` он подтянется из соседней папки.
+7. При запуске `go mod tidy` внутри вашего нового сервиса используйте флаг игнорирования локальных ошибок: `go mod tidy -e`, иначе Go может упасть, пытаясь найти ваш локальный пакет на удаленном GitHub.

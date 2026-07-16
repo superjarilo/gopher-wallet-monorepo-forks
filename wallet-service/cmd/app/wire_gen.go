@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"github.com/aimv/gopher-wallet-monorepo/wallet-service/internal/delivery/grpc"
 	"github.com/aimv/gopher-wallet-monorepo/wallet-service/internal/delivery/http"
 	"github.com/aimv/gopher-wallet-monorepo/wallet-service/internal/repository"
 	"github.com/aimv/gopher-wallet-monorepo/wallet-service/internal/usecase"
@@ -16,11 +17,13 @@ import (
 
 // Injectors from wire.go:
 
-// InitializeApplication собирает все зависимости в готовый HTTP-хендлер
-func InitializeApplication(ctx context.Context, pool *pgxpool.Pool, kafkaBroker string) (*http.Handler, error) {
+// InitializeApplication собирает все зависимости в структуру Application (в main.go объявлена)
+func InitializeApplication(ctx context.Context, pool *pgxpool.Pool, kafkaBroker string) (*Application, error) {
 	walletRepository := repository.NewWalletRepository(pool)
 	kafkaPublisher := repository.NewKafkaPublisher(kafkaBroker)
 	walletUseCase := usecase.NewWalletUseCase(walletRepository, kafkaPublisher)
 	handler := http.NewHandler(walletUseCase)
-	return handler, nil
+	server := grpc.NewServer(walletUseCase)
+	application := NewApplication(handler, server)
+	return application, nil
 }

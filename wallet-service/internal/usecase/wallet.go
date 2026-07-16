@@ -8,6 +8,7 @@ import (
 // Описываем требования к слою данных
 type WalletRepo interface {
 	ProcessTransaction(ctx context.Context, userID string, amount int64, txType string) error
+	GetByUserID(ctx context.Context, userID string) (string, int64, string, string, error)
 }
 
 // Описываем требования к брокеру сообщений
@@ -52,4 +53,10 @@ func (uc *WalletUseCase) Debit(ctx context.Context, userID string, amount int64)
 
 	// Шлем событие в Kafka
 	return uc.publisher.PublishTransfer(ctx, userID, amount, "DEBIT")
+}
+
+// Получение кошелька
+func (uc *WalletUseCase) GetWallet(ctx context.Context, userID string) (string, int64, string, string, error) {
+	// Получаем данные из репозитория
+	return uc.repo.GetByUserID(ctx, userID)
 }

@@ -3,6 +3,7 @@ module github.com/aimv/gopher-wallet-monorepo/notification-service
 go 1.26.4
 
 require (
+	github.com/aimv/gopher-wallet-monorepo/wallet-service v0.0.0-20260715091128-65fdfd9d882b
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/segmentio/kafka-go v0.4.51
 	google.golang.org/grpc v1.82.0

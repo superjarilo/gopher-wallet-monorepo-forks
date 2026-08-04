@@ -1,3 +1,5 @@
+github.com/aimv/gopher-wallet-monorepo/wallet-service v0.0.0-20260715091128-65fdfd9d882b h1:0Hqx1v0Z+rfCqx8eHeiYUF5rK6cpwiYgykMsVtckS/Q=
+github.com/aimv/gopher-wallet-monorepo/wallet-service v0.0.0-20260715091128-65fdfd9d882b/go.mod h1:+B7yZ2weEy+GOVS0Oakr2kPh8I+/1o1nQ1ZGQN+P4o8=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
 github.com/bsm/ginkgo/v2 v2.12.0/go.mod h1:SwYbGRRDovPVboqFv0tPTcG1sN61LM1Z4ARdbAV9g4c=
 github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=

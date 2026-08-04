@@ -14,12 +14,12 @@ import (
 	"github.com/segmentio/kafka-go"
 
 	// Импортируем сгенерированный gRPC-пакет из соседнего модуля
+	"github.com/aimv/gopher-wallet-monorepo/wallet-service/pkg/walletgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"github.com/aimv/gopher-wallet-monorepo/wallet-service/pkg/walletgrpc"
 )
 
-// Структура события должна строго совпадать с контрактом из Wallet Service
+// Структура события должна строго совпадать с контрактом из Wallet Service (wallet-service/internal/repository/kafka.go)
 type TransactionEvent struct {
 	UserID string `json:"user_id"`
 	Amount int64  `json:"amount"`
@@ -35,7 +35,7 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
 	})
-	
+
 	// Обязательно пингуем Redis при старте
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatalf("[Notification] Failed to connect to Redis: %v", err)
@@ -97,14 +97,14 @@ func main() {
 		// === Делаем синхронный gRPC-запрос в Wallet Service за балансом!
 		// Для сетевого запроса ВСЕГДА создаем контекст с коротким таймаутом (2 секунды)
 		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		
+
 		walletData, err := grpcClient.GetBalance(grpcCtx, &walletgrpc.GetBalanceRequest{
 			UserId: event.UserID,
 		})
 		grpcCancel() // Освобождаем ресурсы контекста сразу после ответа
 
 		if err != nil {
-			// Если gRPC сервер упал, финансовая система не должна встать колом. 
+			// Если gRPC сервер упал, финансовая система не должна встать колом.
 			// Логируем ошибку и продолжаем бизнес-логику (паттерн Отказоустойчивости)
 			log.Printf("[gRPC Error] Could not fetch balance for user %s: %v", event.UserID, err)
 			walletData = &walletgrpc.GetBalanceResponse{Balance: 0, Status: "UNKNOWN_ERROR"}
@@ -112,16 +112,16 @@ func main() {
 
 		// Выводим красивое Push-сообщение, обогащенное данными из gRPC
 		fmt.Printf(
-			"\n[PUSH NOTIFICATION SENT] Юзер '%s': Операция %s на сумму %.2f руб. проведена. Текущий остаток на счете: %.2f руб. (Статус: %s)\n", 
-			event.UserID, event.Type, 
-			float64(event.Amount)/100.0, 
-			float64(walletData.GetBalance())/100.0, 
+			"\n[PUSH NOTIFICATION SENT] Юзер '%s': Операция %s на сумму %.2f руб. проведена. Текущий остаток на счете: %.2f руб. (Статус: %s)\n",
+			event.UserID, event.Type,
+			float64(event.Amount)/100.0,
+			float64(walletData.GetBalance())/100.0,
 			walletData.GetStatus())
 
 		// === Записываем транзакцию в Redis (Sorted Set - ZSET) по ключу юзера
 		// В качестве Score используем текущее время Unix, чтобы история была отсортирована по хронологии
 		redisKey := fmt.Sprintf("history:%s", event.UserID)
-		
+
 		err = rdb.ZAdd(ctx, redisKey, redis.Z{
 			Score:  float64(time.Now().UnixNano()),
 			Member: msg.Value, // Кладем сырой JSON-транзакции как строку
